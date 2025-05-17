@@ -1,0 +1,9 @@
+mujoco
+mujoco-py
+gymnasium
+transformers
+accelerate
+datasets
+torch
+matplotlib
+h5py

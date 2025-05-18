@@ -6,20 +6,17 @@ import numpy as np
 import os
 import time
 
-# Dynamically set paths
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "bc_model.pth")
-XML_MODEL_PATH = os.path.join(MODEL_DIR, "panda.xml")  # Example for a 7-DOF arm
+XML_MODEL_PATH = os.path.join(MODEL_DIR, "panda.xml")
 
-# Safety Checks
 if not os.path.exists(XML_MODEL_PATH):
     raise FileNotFoundError(f"Mujoco XML model not found at: {XML_MODEL_PATH}")
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Trained policy model not found at: {MODEL_PATH}")
 
-# Define Behavioral Cloning Model
 class BCModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -32,52 +29,64 @@ class BCModel(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# Load Trained Policy
 model = BCModel()
 model.load_state_dict(torch.load(MODEL_PATH))
 model.eval()
 
-# Initialize Mujoco Simulation
 mj_model = mujoco.MjModel.from_xml_path(XML_MODEL_PATH)
 mj_data = mujoco.MjData(mj_model)
 
-# Simulation Parameters
-simulation_steps = 500
-blend_factor = 0.1  # Controls smoothness of movement
-sleep_time = 0.02   # 50 FPS control loop
+simulation_steps = 500  # Increase steps for longer visualization
+blend_factor = 0.1
+sleep_time = 0.02  # Controls visualization speed
 
-# Launch Viewer
+GRIPPER_OPEN = 0.04
+GRIPPER_CLOSED = 0.0
+
+def control_gripper(close=True):
+    ctrl_value = 255 if close else 0
+    gripper_actuator_idx = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, "actuator8")
+    mj_data.ctrl[gripper_actuator_idx] = ctrl_value
+
+def get_object_position():
+    obj_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "target_object")
+    return mj_data.xpos[obj_body_id]
+
+initial_obj_pos = get_object_position().copy()
+
 with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
-    for step in range(simulation_steps):
-        # 1. Get Current Joint Positions (First 7 joints for 7-DOF arm)
-        current_state = mj_data.qpos[:7].copy()
+    while viewer.is_running():  # Keeps the viewer open until you manually close it
+        for step in range(simulation_steps):
+            current_state = mj_data.qpos[:7].copy()
 
-        # 2. Predict Next Action Using the Policy
-        state_tensor = torch.tensor(current_state.reshape(1, 7), dtype=torch.float32)
-        predicted_action = model(state_tensor).detach().numpy().flatten()
+            state_tensor = torch.tensor(current_state.reshape(1, 7), dtype=torch.float32)
+            predicted_action = model(state_tensor).detach().numpy().flatten()
+            predicted_action = np.clip(predicted_action, -1.0, 1.0)
 
-        # 3. Add Artificial Noise to Visualize Movement (Debugging Purposes Only)
-        predicted_action += 0.3 * np.random.randn(7)
-        predicted_action = np.clip(predicted_action, -1.0, 1.0)  # Ensure valid range
+            new_state = current_state + blend_factor * (predicted_action - current_state)
+            mj_data.qpos[:7] = new_state
+            mj_data.qvel[:7] = 0
 
-        # 4. Smoothly Blend Between Current State and Predicted Action
-        new_state = current_state + blend_factor * (predicted_action - current_state)
-        mj_data.qpos[:7] = new_state
-        mj_data.qvel[:7] = 0  # Zero velocities to keep control stable
+            # Simple Gripper Logic
+            if step < simulation_steps // 3:
+                control_gripper(close=False)
+            else:
+                control_gripper(close=True)
 
-        # 5. Step Simulation
-        mujoco.mj_step(mj_model, mj_data)
+            mujoco.mj_step(mj_model, mj_data)
 
-        # Debug Output
-        print(f"Step: {step}")
-        print(f"Current State (qpos): {current_state}")
-        print(f"Predicted Action: {predicted_action}\n")
+            viewer.sync()
+            time.sleep(sleep_time)
 
-        # 6. Sleep to Control Simulation Speed and Update Viewer
-        viewer.sync()
-        time.sleep(sleep_time)
+        break  # Exit after completing simulation steps
 
-        if not viewer.is_running():
-            break
+final_obj_pos = get_object_position()
+movement_distance = np.linalg.norm(final_obj_pos - initial_obj_pos)
+print(f"\nObject Movement Distance: {movement_distance:.4f} meters")
+
+if movement_distance > 0.05:
+    print("✅ Task Success: Object was moved!")
+else:
+    print("❌ Task Failed: Object was not moved.")
 
 print("Simulation completed!")

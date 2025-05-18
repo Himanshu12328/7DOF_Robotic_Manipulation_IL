@@ -11,17 +11,19 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-def load_data():
-    file_path = os.path.join(DATA_DIR, 'demos.hdf5')
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Data file not found at: {file_path}")
+DATA_FILE = os.path.join(DATA_DIR, "collected_data.hdf5")  # Updated to new dataset
 
-    with h5py.File(file_path, 'r') as f:
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        raise FileNotFoundError(f"Data file not found at: {DATA_FILE}")
+
+    with h5py.File(DATA_FILE, 'r') as f:
         demo_count = len(f) // 2
         if demo_count == 0:
-            raise ValueError("No demonstration data found in HDF5 file.")
+            raise ValueError("No demonstration data found.")
         states = np.concatenate([f[f'states_{i}'][:] for i in range(demo_count)])
         actions = np.concatenate([f[f'actions_{i}'][:] for i in range(demo_count)])
+
     return torch.tensor(states, dtype=torch.float32), torch.tensor(actions, dtype=torch.float32)
 
 class BCModel(nn.Module):
@@ -47,7 +49,7 @@ def train():
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     loss_fn = nn.MSELoss()
 
-    for epoch in range(200):
+    for epoch in range(300):  # Slightly more epochs for better convergence
         preds = model(states)
         loss = loss_fn(preds, actions)
         optimizer.zero_grad()

@@ -17,31 +17,42 @@ if not os.path.exists(XML_MODEL_PATH):
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Trained policy model not found at: {MODEL_PATH}")
 
-class BCModel(nn.Module):
+class AdvancedBCModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(7, 128),
-            nn.ReLU(),
+            nn.Linear(10, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Linear(256, 128),
+            nn.GELU(),
             nn.Linear(128, 7)
         )
 
     def forward(self, x):
         return self.net(x)
 
-model = BCModel()
+model = AdvancedBCModel()
 model.load_state_dict(torch.load(MODEL_PATH))
 model.eval()
 
 mj_model = mujoco.MjModel.from_xml_path(XML_MODEL_PATH)
 mj_data = mujoco.MjData(mj_model)
 
-simulation_steps = 500  # Increase steps for longer visualization
-blend_factor = 0.1
-sleep_time = 0.02  # Controls visualization speed
+simulation_steps = 1500
+blend_factor = 0.3
+sleep_time = 0.015
 
-GRIPPER_OPEN = 0.04
-GRIPPER_CLOSED = 0.0
+GRIPPER_CLOSE_DIST = 0.05
+GRIPPER_HYSTERESIS = 0.01  # Prevent flickering
 
 def control_gripper(close=True):
     ctrl_value = 255 if close else 0
@@ -52,33 +63,47 @@ def get_object_position():
     obj_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "target_object")
     return mj_data.xpos[obj_body_id]
 
+def get_end_effector_position():
+    ee_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "hand")
+    return mj_data.xpos[ee_body_id]
+
 initial_obj_pos = get_object_position().copy()
+gripper_closed = False  # Hysteresis state
 
 with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
-    while viewer.is_running():  # Keeps the viewer open until you manually close it
+    while viewer.is_running():
         for step in range(simulation_steps):
             current_state = mj_data.qpos[:7].copy()
+            ee_pos = get_end_effector_position()
+            obj_pos = get_object_position()
+            relative_pos = obj_pos - ee_pos
 
-            state_tensor = torch.tensor(current_state.reshape(1, 7), dtype=torch.float32)
+            # Prepare input for model
+            state_input = np.concatenate([current_state, relative_pos])
+            state_tensor = torch.tensor(state_input.reshape(1, 10), dtype=torch.float32)
+
             predicted_action = model(state_tensor).detach().numpy().flatten()
             predicted_action = np.clip(predicted_action, -1.0, 1.0)
 
+            # Smoothly apply joint movements
             new_state = current_state + blend_factor * (predicted_action - current_state)
             mj_data.qpos[:7] = new_state
             mj_data.qvel[:7] = 0
 
-            # Simple Gripper Logic
-            if step < simulation_steps // 3:
-                control_gripper(close=False)
-            else:
+            # Intelligent Gripper Control with Hysteresis
+            distance_to_obj = np.linalg.norm(relative_pos)
+            if not gripper_closed and distance_to_obj < GRIPPER_CLOSE_DIST:
                 control_gripper(close=True)
+                gripper_closed = True
+            elif gripper_closed and distance_to_obj > GRIPPER_CLOSE_DIST + GRIPPER_HYSTERESIS:
+                control_gripper(close=False)
+                gripper_closed = False
 
             mujoco.mj_step(mj_model, mj_data)
-
             viewer.sync()
             time.sleep(sleep_time)
 
-        break  # Exit after completing simulation steps
+        break
 
 final_obj_pos = get_object_position()
 movement_distance = np.linalg.norm(final_obj_pos - initial_obj_pos)

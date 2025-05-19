@@ -11,7 +11,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-DATA_FILE = os.path.join(DATA_DIR, "collected_data.hdf5")  # Updated to new dataset
+DATA_FILE = os.path.join(DATA_DIR, "ik_demos.hdf5")
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -19,45 +19,58 @@ def load_data():
 
     with h5py.File(DATA_FILE, 'r') as f:
         demo_count = len(f) // 2
-        if demo_count == 0:
-            raise ValueError("No demonstration data found.")
         states = np.concatenate([f[f'states_{i}'][:] for i in range(demo_count)])
         actions = np.concatenate([f[f'actions_{i}'][:] for i in range(demo_count)])
 
     return torch.tensor(states, dtype=torch.float32), torch.tensor(actions, dtype=torch.float32)
 
-class BCModel(nn.Module):
+class AdvancedBCModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(7, 128),
-            nn.ReLU(),
-            nn.Linear(128, 7)
+            nn.Linear(10, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+
+            nn.Linear(256, 128),
+            nn.GELU(),
+
+            nn.Linear(128, 7)  # Output layer for 7 joint positions
         )
 
     def forward(self, x):
         return self.net(x)
 
 def train():
-    try:
-        states, actions = load_data()
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Data loading failed: {e}")
-        return
+    states, actions = load_data()
 
-    model = BCModel()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    model = AdvancedBCModel()
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=50)
     loss_fn = nn.MSELoss()
 
-    for epoch in range(300):  # Slightly more epochs for better convergence
+    for epoch in range(2000):
+        model.train()
         preds = model(states)
         loss = loss_fn(preds, actions)
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step(loss)
 
-        if (epoch + 1) % 50 == 0:
-            print(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+        if (epoch + 1) % 100 == 0:
+            print(f"Epoch {epoch + 1}, Loss: {loss.item():.6f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
 
     model_path = os.path.join(MODEL_DIR, "bc_model.pth")
     torch.save(model.state_dict(), model_path)

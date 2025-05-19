@@ -167,12 +167,30 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Ruff stuff:
-.ruff_cache/
 
-# PyPI configuration file
-.pypirc
-
+# Virtual environments
 venv/
+ENV/
+env/
+*.egg-info/
+
+# Python cache files
 __pycache__/
-*.h5
+*.py[cod]
+*.pyo
+
+# Data files
+data/*.hdf5
+
+# Models
+models/*.pth
+
+# Jupyter Notebooks Checkpoints
+.ipynb_checkpoints/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

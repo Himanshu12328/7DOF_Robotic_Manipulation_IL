@@ -1,9 +1,6 @@
 mujoco
 mujoco-py
-gymnasium
-transformers
-accelerate
-datasets
-torch
-matplotlib
+torch>=2.0.0
+numpy
 h5py
+matplotlib

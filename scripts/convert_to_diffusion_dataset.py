@@ -34,3 +34,5 @@ split_dataset = dataset.train_test_split(test_size=0.1)
 
 # Save the dataset locally
 split_dataset.save_to_disk('lerobot_dataset')
+
+print("Dataset conversion complete. Saved to 'lerobot_dataset'.")

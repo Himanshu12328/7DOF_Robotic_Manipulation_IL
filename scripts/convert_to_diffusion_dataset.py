@@ -1,26 +1,38 @@
 import h5py
-import numpy as np
 import os
+import numpy as np
+from datasets import Dataset, DatasetDict
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-DATA_FILE = os.path.join(BASE_DIR, "data", "ik_demos.hdf5")
-SAVE_DIR = os.path.join(BASE_DIR, "diffusion_dataset")
-os.makedirs(SAVE_DIR, exist_ok=True)
+# Path to your existing HDF5 dataset
+hdf5_path = 'data/ik_demos.hdf5'
 
-dataset = {
-    "observations": [],
-    "actions": [],
-}
+# Initialize lists to store the data
+observations = []
+actions = []
 
-with h5py.File(DATA_FILE, "r") as f:
-    for i in range(50):  # or however many demos you have
-        if f.get(f"states_{i}") is None or f.get(f"actions_{i}") is None:
-            continue
+# Open the HDF5 file and extract data
+with h5py.File(hdf5_path, 'r') as f:
+    for key in f.keys():
+        if 'states' in key:
+            idx = key.split('_')[-1]
+            obs = f[f'states_{idx}'][:]
+            act = f[f'actions_{idx}'][:]
+            for o, a in zip(obs, act):
+                observations.append({'state': o.tolist()})
+                actions.append({'action': a.tolist()})
 
-        states = f[f"states_{i}"][:]
-        actions = f[f"actions_{i}"][:]
-        dataset["observations"].append(states.tolist())
-        dataset["actions"].append(actions.tolist())
+# Combine observations and actions
+data = []
+for obs, act in zip(observations, actions):
+    data.append({**obs, **act})
 
-np.savez_compressed(os.path.join(SAVE_DIR, "pick_place_data.npz"), **dataset)
-print("✅ Converted dataset saved to:", SAVE_DIR)
+# Create a Hugging Face Dataset
+dataset = Dataset.from_list(data)
+
+# Optionally, split into train and test sets
+split_dataset = dataset.train_test_split(test_size=0.1)
+
+# Save the dataset locally
+split_dataset.save_to_disk('lerobot_dataset')
+
+print("Dataset conversion complete. Saved to 'lerobot_dataset'.")
